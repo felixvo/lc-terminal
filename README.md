@@ -17,6 +17,7 @@ after a while; when they do, `lc` tells you to re-run `lc config`.
 ## Daily workflow
 
 ```bash
+lc                        # dashboard (same as `lc dash`): NeetCode 150 with your progress
 lc random                 # random *unsolved* problem from your default list
 lc review                 # re-solve problems due for review (spaced repetition)
 lc daily                  # today's LeetCode daily challenge
@@ -26,10 +27,49 @@ lc stats                  # progress by difficulty, topic and list
 Every solve opens your editor, starts a timer, and then offers
 `run / submit / edit / hints / quit`. Passing all sample tests offers to submit.
 
+## Dashboard
+
+`lc` (or `lc dash`, `lc dashboard`) opens a full-screen view of a list, which is
+**NeetCode 150** by default (`lc dash --list questions` for another). It shows
+your overall and per-difficulty progress, reviews due, your streak, and every
+problem grouped by section, with solved/attempted marks, submit counts and
+review dates. Problems that aren't cached yet are fetched in the background,
+and their titles and difficulties fill in as they arrive.
+
+| Key | Action |
+|---|---|
+| `Ctrl+N` / `↓` / `j`, `Ctrl+P` / `↑` / `k` | move |
+| `PgDn` / `PgUp`, `g` / `G` | page, top / bottom |
+| `Enter` | solve the selected problem (returns to the dashboard afterwards) |
+| `o` | open it on leetcode.com |
+| `f` | status filter: all → unsolved → solved → due for review |
+| `d` | difficulty filter: any → Easy → Medium → Hard |
+| `/` | search by title (`Enter` keeps it, `Esc` clears) |
+| `r` | jump to a random unsolved problem in the current view |
+| `q` | quit |
+
+When output isn't a terminal, `lc dash` prints the same list as `lc list neetcode150`.
+
+## Menus
+
+Menus (the post-edit one, and the `lc review` picker) are keyboard-driven:
+
+| Key | Action |
+|---|---|
+| `Ctrl+N` / `↓` / `j` | next |
+| `Ctrl+P` / `↑` / `k` | previous |
+| `Enter` | select |
+| `r` `s` `e` `h` `q` | pick run / submit / edit / hints / quit directly |
+| `1`–`9` | pick that option directly |
+| `Esc` | cancel (quit) |
+
+When input isn't a terminal (piped or scripted), menus fall back to a typed prompt.
+
 ## Commands
 
 | Command | What it does |
 |---|---|
+| `lc` / `lc dash [--list NAME]` | Interactive dashboard (default list: neetcode150) |
 | `lc random [--list NAME] [-d easy\|medium\|hard] [-t TOPIC] [--include-solved]` | Random problem; filters are repeatable (`-d medium -d hard`, `-t "dynamic"`) |
 | `lc solve <slug\|url>` | Show → editor → run/submit |
 | `lc daily` | Solve today's daily challenge |
@@ -108,4 +148,4 @@ pytest
 The code is in `leet/`: `cli.py` (commands), `api.py` (LeetCode client + cache),
 `history.py` (progress + review scheduling), `display.py` (Rich output),
 `templates.py` (solution files, `@tests`), `lists.py`, `languages.py`, `config.py`,
-`timer.py`. The tests never touch the network.
+`timer.py`, `menu.py` (keyboard menus), `dashboard.py`. The tests never touch the network.

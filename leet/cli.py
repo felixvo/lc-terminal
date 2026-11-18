@@ -16,11 +16,12 @@ from pathlib import Path
 
 import click
 from rich import box
-from rich.prompt import Confirm, IntPrompt, Prompt
+from rich.markup import escape
+from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
 from . import config as cfg
-from . import display, languages, lists, templates
+from . import display, languages, lists, menu, templates
 from .api import AuthError, LeetCodeClient, LeetCodeError
 from .display import console
 from .history import INTERVALS, History, now
@@ -147,6 +148,26 @@ def _do_submit(client, q, code, lang, history, elapsed=None) -> dict:
     return result
 
 
+ACTIONS = [
+    ("run", "run examples + your @tests"),
+    ("submit", "submit to LeetCode"),
+    ("edit", "reopen the editor"),
+    ("hints", "show hints"),
+    ("quit", "stop for now"),
+]
+
+
+def _next_action() -> str:
+    width = max(len(name) for name, _ in ACTIONS)
+    i = menu.choose(
+        "What next?",
+        [f"{name.ljust(width)}  [dim]{desc}[/dim]" for name, desc in ACTIONS],
+        names=[name for name, _ in ACTIONS],
+        keys=[name[0] for name, _ in ACTIONS],
+    )
+    return "quit" if i is None else ACTIONS[i][0]
+
+
 def _after_edit(client, q, path: Path, lang: Lang, timer: Timer, history: History) -> None:
     if not cfg.has_auth():
         console.print("\n[dim]No LeetCode login configured, so you can't run or submit. Run: lc config[/dim]")
@@ -160,7 +181,7 @@ def _after_edit(client, q, path: Path, lang: Lang, timer: Timer, history: Histor
                 clock += f" [red](over by {fmt_duration(timer.over)})[/red]"
         console.print(f"\n[dim]{clock}[/dim]")
 
-        choice = Prompt.ask("What next?", choices=["run", "submit", "edit", "hints", "quit"], default="run")
+        choice = _next_action()
         if choice == "quit":
             return
         if choice == "edit":
@@ -233,10 +254,50 @@ def solve_options(f):
 
 # ─── CLI ──────────────────────────────────────────────────────────────────────
 
-@click.group(context_settings={"help_option_names": ["-h", "--help"]})
+@click.group(invoke_without_command=True, context_settings={"help_option_names": ["-h", "--help"]})
 @click.version_option(package_name="leet")
-def cli():
-    """🧩 lc — terminal LeetCode practice"""
+@click.pass_context
+def cli(ctx):
+    """🧩 lc — terminal LeetCode practice. Run with no command to open the dashboard."""
+    if ctx.invoked_subcommand is None:
+        if menu.interactive():
+            ctx.invoke(dash)
+        else:
+            click.echo(ctx.get_help())
+
+
+DASHBOARD_LIST = "neetcode150"
+
+
+@cli.command()
+@click.option("--list", "list_name", default=DASHBOARD_LIST, show_default=True, metavar="NAME",
+              help="List to show.")
+@click.option("--lang", "lang_name", metavar="LANG", help="Language for problems you open.")
+@click.option("--timebox", type=float, metavar="MIN", help="Timebox for problems you open.")
+def dash(list_name, lang_name, timebox):
+    """Interactive dashboard: browse a list with your progress and pick a problem."""
+    path = _list_path(list_name)
+    if not menu.interactive():
+        list_cmd.callback(list_name)  # not a terminal: print the static list instead
+        return
+    lang = _lang(lang_name)
+    from .dashboard import Dashboard
+
+    board = Dashboard(path)
+    try:
+        while (slug := board.run()) is not None:
+            client = LeetCodeClient.from_config()
+            try:
+                _solve(client, _fetch(client, slug), lang, False, timebox)
+            except SystemExit:
+                pass  # e.g. premium problem: show the error, then go back
+            console.input("\n[dim]Press Enter to return to the dashboard…[/dim]")
+            board.reload()
+    finally:
+        board.stop()
+
+
+cli.add_command(dash, "dashboard")
 
 
 @cli.command()
@@ -390,25 +451,23 @@ def review(hints, lang_name, timebox):
         console.print(msg)
         return
 
-    t = Table(box=box.SIMPLE_HEAD, title=f"{len(due)} problem(s) due", title_justify="left")
-    t.add_column("#", justify="right", style="dim")
-    t.add_column("Problem")
-    t.add_column("Difficulty")
-    t.add_column("Due")
-    t.add_column("Interval", justify="right", style="dim")
     today = now().date()
-    for i, (_, e) in enumerate(due, 1):
+    width = max(len(e["title"]) for _, e in due)
+    labels = []
+    for _, e in due:
         overdue = (today - date.fromisoformat(e["review"]["due"])).days
-        when = "today" if overdue == 0 else f"[red]{overdue}d overdue[/red]"
-        t.add_row(str(i), e["title"], display.diff_text(e.get("difficulty")), when,
-                  f"{INTERVALS[e['review']['level']]}d")
-    console.print(t)
+        when = "due today" if overdue == 0 else f"[red]{overdue}d overdue[/red]"
+        diff = e.get("difficulty") or ""
+        color = display.DIFFICULTY_COLORS.get(diff, "dim")
+        labels.append(f"{escape(e['title'].ljust(width))}  [{color}]{diff:<6}[/]  {when}  "
+                      f"[dim]· {INTERVALS[e['review']['level']]}d interval[/dim]")
 
-    pick = IntPrompt.ask("Which one?", default=1)
-    if not 1 <= pick <= len(due):
-        _fail(f"Pick a number from 1 to {len(due)}.")
+    console.print(f"[bold]{len(due)} problem(s) due for review[/bold]")
+    pick = menu.choose("Which one?", labels)
+    if pick is None:
+        return
     client = LeetCodeClient.from_config()
-    _solve(client, _fetch(client, due[pick - 1][0]), _lang(lang_name), hints, timebox)
+    _solve(client, _fetch(client, due[pick][0]), _lang(lang_name), hints, timebox)
 
 
 @cli.command()
