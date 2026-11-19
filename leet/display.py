@@ -240,6 +240,79 @@ def show_submit_result(result: dict) -> None:
     console.print(Panel(Group(*parts), title=f"{'✅' if accepted else '❌'} {status}", border_style=color))
 
 
+LOCAL_MARKS = {
+    "pass": "[bright_green]✓[/]",
+    "order": "[yellow]≈[/]",
+    "fail": "[bright_red]✗[/]",
+    "error": "[bright_red]✗[/]",
+    "timeout": "[bright_red]⏱[/]",
+    "skipped": "[dim]–[/]",
+    "none": "[dim]·[/]",
+}
+
+
+def show_local_result(report) -> None:
+    """Results of a local run (see leet.local.LocalReport)."""
+    if report.load_error:
+        console.print(Panel(report.load_error, title="[red]Your file failed to load[/red]", border_style="red"))
+        if "expected an indented block after function definition" in report.load_error:
+            console.print("[yellow]Looks like a method still has no body: the solution isn't written yet.[/yellow]")
+        return
+
+    results = report.results
+    show_stdout = any(r.stdout.strip() for r in results)
+    table = Table(box=box.SIMPLE_HEAD, show_lines=True, pad_edge=False)
+    table.add_column("", no_wrap=True)
+    table.add_column("Input", style="cyan")
+    table.add_column("Output")
+    table.add_column("Expected", style="dim")
+    if show_stdout:
+        table.add_column("Stdout", style="dim")
+    table.add_column("Time", justify="right", style="dim", no_wrap=True)
+
+    for n, r in enumerate(results, 1):
+        tag = "" if r.case.source == "example" else " [dim]@[/dim]" if r.case.source == "custom" else ""
+        if r.verdict == "error":
+            output = Text("error ↓", style="bright_red")
+        elif r.verdict in ("timeout", "skipped"):
+            output = Text(r.verdict, style="bright_red" if r.verdict == "timeout" else "dim")
+        else:
+            color = {"pass": "bright_green", "fail": "bright_red", "order": "yellow"}.get(r.verdict, "")
+            output = Text(r.output or "", style=color)
+        expected = r.case.expected if r.case.expected is not None else Text("—", style="dim")
+        row = [f"{LOCAL_MARKS[r.verdict]} {n}{tag}", r.case.input, output, expected]
+        if show_stdout:
+            row.append(r.stdout.rstrip())
+        row.append(f"{r.ms:.1f} ms" if r.ms is not None else "")
+        table.add_row(*row)
+
+    checked = [r for r in results if r.case.expected is not None]
+    passed = sum(r.verdict in ("pass", "order") for r in checked)
+    errors = sum(r.verdict == "error" for r in results)
+    if report.timed_out:
+        title, color = f"⏱ Timed out after {report.timeout:g}s (infinite loop?)", "bright_red"
+    elif checked:
+        ok = passed == len(checked) and not errors
+        title = f"{'✅' if ok else '❌'} Local: {passed}/{len(checked)} passed"
+        color = "bright_green" if ok else "bright_red"
+    else:
+        title = f"🐍 Local: ran {len(results)} case{'s' if len(results) != 1 else ''}"
+        color = "bright_red" if errors else "blue"
+    unchecked = len(results) - len(checked)
+    if checked and unchecked:
+        title += f" · {unchecked} without expected output"
+    console.print(Panel(table, title=title, border_style=color))
+
+    if any(r.verdict == "order" for r in results):
+        console.print("[yellow]≈[/yellow] [dim]same elements in a different order. Fine if the problem accepts "
+                      "any order.[/dim]")
+    if any(r.case.source == "custom" for r in results):
+        console.print("[dim]@ = from your @tests. Add `=> expected` after a case to check it.[/dim]")
+    for n, r in enumerate(results, 1):
+        if r.error:
+            console.print(Panel(r.error, title=f"[red]Case {n} error[/red]", border_style="red"))
+
+
 # ─── Stats ────────────────────────────────────────────────────────────────────
 
 def bar(done: int, total: int, width: int = 20) -> Text:

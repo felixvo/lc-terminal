@@ -10,6 +10,7 @@ from .languages import Lang
 
 TESTS_START = "@tests"
 TESTS_END = "@end"
+EXPECT = "=>"
 
 
 def html_to_text(content: str | None) -> str:
@@ -49,7 +50,8 @@ def build_template(q: dict, code: str, lang: Lang) -> str:
             out.append(f"{c} {line}")
     out += [
         c,
-        f"{c} {TESTS_START} — extra inputs for `lc run`: one parameter per line, as in LeetCode's testcase box",
+        f"{c} {TESTS_START} — one parameter per line, like LeetCode's testcase box; "
+        f"optional `{EXPECT} expected` after a case",
         f"{c} {TESTS_END}",
         "",
         code.rstrip() + "\n",
@@ -94,6 +96,28 @@ def group_cases(lines: list[str], per: int) -> tuple[list[str], list[str]]:
     n = len(lines) - len(lines) % per
     cases = ["\n".join(lines[i:i + per]) for i in range(0, n, per)]
     return cases, lines[n:]
+
+
+def custom_cases(lines: list[str], per: int) -> tuple[list[tuple[str, str | None]], list[str]]:
+    """Group @tests lines into (input, expected or None) cases. `=> x` sets the previous case's expected."""
+    cases: list[tuple[str, str | None]] = []
+    buf: list[str] = []
+    for line in lines:
+        if line.startswith(EXPECT):
+            if cases and not buf and cases[-1][1] is None:  # first `=>` wins
+                cases[-1] = (cases[-1][0], line[len(EXPECT):].strip())
+            continue
+        buf.append(line)
+        if len(buf) == per:
+            cases.append(("\n".join(buf), None))
+            buf = []
+    return cases, buf
+
+
+def example_outputs(q: dict) -> list[str] | None:
+    """Expected outputs of the examples, parsed from the statement (None if they don't line up)."""
+    outputs = re.findall(r"^Output:?\s*(.+?)\s*$", html_to_text(q.get("content")), flags=re.MULTILINE)
+    return outputs if outputs and len(outputs) == len(example_cases(q)) else None
 
 
 def example_cases(q: dict) -> list[str]:

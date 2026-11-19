@@ -59,7 +59,7 @@ Menus (the post-edit one, and the `lc review` picker) are keyboard-driven:
 | `Ctrl+N` / `↓` / `j` | next |
 | `Ctrl+P` / `↑` / `k` | previous |
 | `Enter` | select |
-| `r` `s` `e` `h` `q` | pick run / submit / edit / hints / quit directly |
+| `t` `r` `s` `e` `h` `q` | pick test / run / submit / edit / hints / quit directly |
 | `1`–`9` | pick that option directly |
 | `Esc` | cancel (quit) |
 
@@ -75,7 +75,8 @@ When input isn't a terminal (piped or scripted), menus fall back to a typed prom
 | `lc daily` | Solve today's daily challenge |
 | `lc review` | Pick from problems due for review |
 | `lc show <slug\|url> [--hints] [--refresh]` | Just display a problem |
-| `lc run <slug> [FILE] [--input "..."]` | Run examples + your `@tests` (doesn't count as a submission) |
+| `lc test <slug> [FILE] [--input "..."] [--timeout S]` | Run a Python solution **locally**: no LeetCode, no login |
+| `lc run <slug> [FILE] [--input "..."]` | Run examples + your `@tests` on LeetCode (doesn't count as a submission) |
 | `lc submit <slug> [FILE]` | Real submission |
 | `lc stats` | Solved counts, acceptance rate, streak, avg time, list progress, topics |
 | `lc list [NAME]` | A list with ✓ solved / ◐ attempted marks and next review dates |
@@ -89,25 +90,51 @@ The solve commands (`random`, `solve`, `daily`, `review`) also take:
 notification when time's up (macOS, or Linux with `notify-send`), and the result
 shows whether you finished within it.
 
-`run`/`submit` find your solution in the solutions folder automatically; pass a
+`test`/`run`/`submit` find your solution in the solutions folder automatically; pass a
 file to use a different one. The language comes from the file extension.
 
 ## Custom test cases
 
 Every solution file has a test block. Add inputs one parameter per line, exactly
-like LeetCode's testcase box, and `lc run` runs them along with the examples:
+like LeetCode's testcase box, and `lc test` / `lc run` run them along with the examples:
 
 ```python
-# @tests — extra inputs for `lc run`: one parameter per line, as in LeetCode's testcase box
+# @tests — one parameter per line, like LeetCode's testcase box; optional `=> expected` after a case
 # [3,3]
 # 6
+# => [0,1]
 # [-1,-2,-3,-4,-5]
 # -8
 # @end
 ```
 
-The results table shows input, your output, expected output (computed by LeetCode)
-and anything you `print()`ed, for every case.
+The results table shows input, your output, expected output and anything you
+`print()`ed, for every case. On LeetCode (`run`), expected outputs are computed by
+LeetCode itself. Locally (`test`), they come from the problem's examples and your
+`=> expected` lines, and cases without one just show your output.
+
+## Local testing (Python)
+
+`lc test two-sum`, or **test** (`t`) in the post-edit menu, runs your solution on
+your machine. It's instant, works offline and without a login, and doesn't touch
+your LeetCode history.
+
+- **Cases:** the problem's examples (expected outputs parsed from the statement)
+  plus your `@tests`.
+- **LeetCode semantics:** `List`, `Optional`, `collections`, `heapq`, `bisect`, `math`, … are
+  pre-imported. `ListNode` / `TreeNode` inputs and outputs are converted from and to
+  LeetCode's list format. In-place (`-> None`) methods are checked on the modified
+  argument, class-design problems (e.g. `LRUCache`) work, and the hidden `pos` of
+  Linked List Cycle is wired up.
+- **Results:** ✓ pass, ✗ fail, ≈ same elements in a different order (fine when the
+  problem says "any order"), · no expected output. Tracebacks show only your file's lines.
+- **Safety:** each run is a separate process with a timeout (`--timeout`, default 10s),
+  so an infinite loop can't hang anything.
+- `lc test` exits non-zero on any failure, so it works in scripts.
+
+Local checks are only as good as the cases you give them, so finish with
+`run`/`submit` for LeetCode's hidden tests. Problems that rely on LeetCode-only
+helpers (interactive APIs like `isBadVersion`, random-pointer `Node`s) can't run locally.
 
 ## Spaced repetition
 
@@ -148,4 +175,4 @@ pytest
 The code is in `leet/`: `cli.py` (commands), `api.py` (LeetCode client + cache),
 `history.py` (progress + review scheduling), `display.py` (Rich output),
 `templates.py` (solution files, `@tests`), `lists.py`, `languages.py`, `config.py`,
-`timer.py`, `menu.py` (keyboard menus), `dashboard.py`. The tests never touch the network.
+`timer.py`, `menu.py` (keyboard menus), `dashboard.py`, `local.py` + `local_runner.py` (local testing). The tests never touch the network.

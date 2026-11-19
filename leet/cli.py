@@ -21,7 +21,7 @@ from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
 from . import config as cfg
-from . import display, languages, lists, menu, templates
+from . import display, languages, lists, local, menu, templates
 from .api import AuthError, LeetCodeClient, LeetCodeError
 from .display import console
 from .history import INTERVALS, History, now
@@ -117,12 +117,28 @@ def _build_cases(q: dict, code: str, lang: Lang, custom_input: str | None) -> li
     extra_lines = templates.parse_custom_tests(code, lang)
     if extra_lines:
         per = templates.params_per_case(q)
-        extra, leftover = templates.group_cases(extra_lines, per)
-        if leftover:
-            console.print(f"[yellow]Ignoring {len(leftover)} trailing line(s) in @tests: "
-                          f"each case needs {per} line(s).[/yellow]")
-        cases += extra
+        extra, leftover = templates.custom_cases(extra_lines, per)
+        _warn_leftover(leftover, per)
+        cases += [inp for inp, _ in extra]
     return cases
+
+
+def _warn_leftover(leftover: list[str], per: int) -> None:
+    if leftover:
+        console.print(f"[yellow]Ignoring {len(leftover)} trailing line(s) in @tests: "
+                      f"each case needs {per} line(s).[/yellow]")
+
+
+def _do_test(q, path: Path, lang: Lang, custom_input=None, timeout: float = 10.0):
+    """Run a Python solution locally against examples + @tests."""
+    if lang.slug != "python3":
+        raise local.LocalRunError(f"Local testing supports Python only ({lang.name} isn't). Use run instead.")
+    cases, leftover = local.build_cases(q, path.read_text(), lang, custom_input)
+    _warn_leftover(leftover, templates.params_per_case(q))
+    with display.waiting(f"Testing locally ({len(cases)} case{'s' if len(cases) != 1 else ''})"):
+        report = local.run(q, path, cases, timeout=timeout)
+    display.show_local_result(report)
+    return report
 
 
 def _do_run(client, q, code, lang, history, custom_input=None) -> dict:
@@ -148,30 +164,43 @@ def _do_submit(client, q, code, lang, history, elapsed=None) -> dict:
     return result
 
 
-ACTIONS = [
-    ("run", "run examples + your @tests"),
-    ("submit", "submit to LeetCode"),
-    ("edit", "reopen the editor"),
-    ("hints", "show hints"),
-    ("quit", "stop for now"),
-]
+ACTIONS = {
+    "test": "run locally: examples + your @tests (Python, no LeetCode)",
+    "run": "run on LeetCode: examples + your @tests",
+    "submit": "submit to LeetCode",
+    "edit": "reopen the editor",
+    "hints": "show hints",
+    "quit": "stop for now",
+}
 
 
-def _next_action() -> str:
-    width = max(len(name) for name, _ in ACTIONS)
+def _available_actions(lang: Lang) -> list[str]:
+    names = list(ACTIONS)
+    if lang.slug != "python3":
+        names.remove("test")
+    if not cfg.has_auth():
+        names = [n for n in names if n not in ("run", "submit")]
+    return names
+
+
+def _next_action(names: list[str]) -> str:
+    width = max(len(n) for n in names)
     i = menu.choose(
         "What next?",
-        [f"{name.ljust(width)}  [dim]{desc}[/dim]" for name, desc in ACTIONS],
-        names=[name for name, _ in ACTIONS],
-        keys=[name[0] for name, _ in ACTIONS],
+        [f"{n.ljust(width)}  [dim]{ACTIONS[n]}[/dim]" for n in names],
+        names=names,
+        keys=[n[0] for n in names],
     )
-    return "quit" if i is None else ACTIONS[i][0]
+    return "quit" if i is None else names[i]
 
 
 def _after_edit(client, q, path: Path, lang: Lang, timer: Timer, history: History) -> None:
+    names = _available_actions(lang)
     if not cfg.has_auth():
-        console.print("\n[dim]No LeetCode login configured, so you can't run or submit. Run: lc config[/dim]")
-        return
+        if "test" not in names:
+            console.print("\n[dim]No LeetCode login configured, so you can't run or submit. Run: lc config[/dim]")
+            return
+        console.print("\n[dim]No LeetCode login: local testing only. Run `lc config` to run/submit on LeetCode.[/dim]")
 
     while True:
         clock = f"⏱  {fmt_duration(timer.elapsed())}"
@@ -181,7 +210,7 @@ def _after_edit(client, q, path: Path, lang: Lang, timer: Timer, history: Histor
                 clock += f" [red](over by {fmt_duration(timer.over)})[/red]"
         console.print(f"\n[dim]{clock}[/dim]")
 
-        choice = _next_action()
+        choice = _next_action(names)
         if choice == "quit":
             return
         if choice == "edit":
@@ -193,7 +222,13 @@ def _after_edit(client, q, path: Path, lang: Lang, timer: Timer, history: Histor
 
         code = path.read_text()
         try:
-            if choice == "run":
+            if choice == "test":
+                report = _do_test(q, path, lang)
+                if not (report.all_passed and cfg.has_auth()
+                        and Confirm.ask("\n[yellow]All local tests passed! Submit to LeetCode?[/yellow]",
+                                        default=False)):
+                    continue
+            elif choice == "run":
                 result = _do_run(client, q, code, lang, history)
                 if not (display.all_passed(result)
                         and Confirm.ask("\n[yellow]All tests passed! Submit?[/yellow]", default=False)):
@@ -491,6 +526,25 @@ def solve(slug_or_url, hints, lang_name, timebox):
     lang = _lang(lang_name)
     client = LeetCodeClient.from_config()
     _solve(client, _fetch(client, slug_or_url), lang, hints, timebox)
+
+
+@cli.command()
+@click.argument("slug_or_url")
+@click.argument("file", required=False, type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--input", "custom_input", help=r'Test input instead of examples + @tests, e.g. "[3,2,4]\n6".')
+@click.option("--timeout", type=float, default=10.0, show_default=True, help="Seconds before giving up.")
+def test(slug_or_url, file, custom_input, timeout):
+    """Run a Python solution locally against examples + @tests (no LeetCode, no login)."""
+    client = LeetCodeClient.from_config()
+    q = _fetch(client, slug_or_url)
+    path, lang = _find_solution(q["slug"], file, None if file else "python3")
+    try:
+        report = _do_test(q, path, lang, custom_input, timeout)
+    except local.LocalRunError as e:
+        _fail(str(e))
+    if report.load_error or report.timed_out or any(r.verdict in ("fail", "error", "timeout")
+                                                    for r in report.results):
+        sys.exit(1)
 
 
 @cli.command()
